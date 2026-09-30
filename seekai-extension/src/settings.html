@@ -523,6 +523,20 @@
       </div>
     </div>
 
+    <div class="section">
+      <div class="section-title"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="svg-icon"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg> Backup & Restore</div>
+      <div class="section-description">Export your pinned bookmarks and click stats, or restore them from a file.</div>
+      
+      <div class="setting-item" style="margin-bottom: 12px; display: flex; gap: 12px;">
+        <button class="button secondary" id="exportBackupBtn" style="flex: 1;">
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="svg-icon"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg> Export Backup
+        </button>
+        <button class="button secondary" id="importBackupBtn" style="flex: 1;">
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="svg-icon"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg> Import Backup
+        </button>
+        <input type="file" id="importBackupFile" accept=".json,.html" style="display: none;">
+      </div>
+    </div>
 
     <div class="button-group">
       <button class="button" id="saveBtn">Save Settings</button>

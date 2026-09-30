@@ -121,7 +121,7 @@ class PinboardApp {
 
     // Handle Pin action
     this.uiController.onPin(async (item) => {
-      await this.dataIndexer.togglePin(item.id);
+      await this.dataIndexer.togglePin(item.id, item.url);
       
       // Re-render currently viewed state
       if (this.uiController.state.searchQuery) {
@@ -189,8 +189,8 @@ class PinboardApp {
     // Render as initial results, mapping isPinned status
     let results = allBookmarks.map(item => ({
       item,
-      score: this.dataIndexer.isPinned(item.id) ? 9999 : 1, // High score for pinned items
-      isPinned: this.dataIndexer.isPinned(item.id),
+      score: this.dataIndexer.isPinned(item.id, item.url) ? 9999 : 1, // High score for pinned items
+      isPinned: this.dataIndexer.isPinned(item.id, item.url),
       matches: [],
       matchedField: 'title'
     }));
@@ -247,7 +247,7 @@ class PinboardApp {
     // Inject isPinned status
     results = results.map(result => ({
       ...result,
-      isPinned: this.dataIndexer.isPinned(result.item.id)
+      isPinned: this.dataIndexer.isPinned(result.item.id, result.item.url)
     }));
 
     // Check if query is a simple math expression
@@ -371,7 +371,7 @@ class PinboardApp {
         await chrome.windows.update(item.windowId, { focused: true });
       } else if (item.type === 'bookmark') {
         // Track bookmark usage before opening
-        await this.dataIndexer.trackBookmarkUsage(item.id);
+        await this.dataIndexer.trackBookmarkUsage(item.id, item.url);
         // Open URL in current tab
         window.location.href = item.url;
       } else {

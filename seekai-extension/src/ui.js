@@ -518,8 +518,13 @@ class UIController {
       img.src = result.item.icon;
       img.alt = '';
       img.onerror = () => {
-        img.style.display = 'none';
-        icon.innerHTML = this.getTypeEmoji(result.item.type);
+        // Fallback to Chrome internal favicon if Google service fails
+        if (result.item.url && !img.src.includes('_favicon')) {
+          img.src = `chrome-extension://${chrome.runtime.id}/_favicon/?pageUrl=${encodeURIComponent(result.item.url)}&size=32`;
+        } else {
+          img.style.display = 'none';
+          icon.innerHTML = this.getTypeEmoji(result.item.type);
+        }
       };
       icon.appendChild(img);
     } else {
@@ -678,13 +683,17 @@ class UIController {
     const icon = document.createElement('div');
     icon.className = 'shortcut-icon';
     
-    if (shortcut.icon && shortcut.icon.startsWith('http')) {
+    if (shortcut.icon && (shortcut.icon.startsWith('http') || shortcut.icon.startsWith('chrome-extension://'))) {
       const img = document.createElement('img');
       img.src = shortcut.icon;
       img.alt = '';
       img.onerror = () => {
-        img.style.display = 'none';
-        icon.textContent = '🔖';
+        if (shortcut.url && !img.src.includes('_favicon')) {
+          img.src = `chrome-extension://${chrome.runtime.id}/_favicon/?pageUrl=${encodeURIComponent(shortcut.url)}&size=32`;
+        } else {
+          img.style.display = 'none';
+          icon.textContent = '🔖';
+        }
       };
       icon.appendChild(img);
     } else {

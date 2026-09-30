@@ -136,7 +136,7 @@ class DataIndexer {
     for (const node of nodes) {
       if (node.url) {
         const bookmarkId = node.id;
-        const usageData = stats[bookmarkId] || { count: 0, lastUsed: 0 };
+        const usageData = stats[bookmarkId] || (node.url && stats[node.url]) || { count: 0, lastUsed: 0 };
         
         this.cache.bookmarks.push({
           id: node.id,
@@ -267,8 +267,8 @@ class DataIndexer {
         return '';
       }
       
-      // Use Chrome's native local favicon cache (100% accurate for visited/bookmarked sites)
-      return `chrome-extension://${chrome.runtime.id}/_favicon/?pageUrl=${encodeURIComponent(url)}&size=32`;
+      // Use Google's high-res favicon service (works immediately for imported bookmarks without needing prior visits)
+      return `https://www.google.com/s2/favicons?domain=${encodeURIComponent(urlObj.hostname)}&sz=64`;
     } catch (error) {
       return '';
     }
@@ -277,24 +277,29 @@ class DataIndexer {
   /**
    * Track bookmark usage
    * @param {string} bookmarkId - Bookmark ID
+   * @param {string} [url] - Optional Bookmark URL
    */
-  async trackBookmarkUsage(bookmarkId) {
+  async trackBookmarkUsage(bookmarkId, url = null) {
     try {
       // Get current stats
       const { bookmarkStats = {} } = await chrome.storage.local.get('bookmarkStats');
       
       // Update stats for this bookmark
-      if (!bookmarkStats[bookmarkId]) {
-        bookmarkStats[bookmarkId] = { count: 0, lastUsed: 0 };
-      }
+      const current = bookmarkStats[bookmarkId] || (url && bookmarkStats[url]) || { count: 0, lastUsed: 0 };
+      const updated = {
+        count: (current.count || 0) + 1,
+        lastUsed: Date.now()
+      };
       
-      bookmarkStats[bookmarkId].count = (bookmarkStats[bookmarkId].count || 0) + 1;
-      bookmarkStats[bookmarkId].lastUsed = Date.now();
+      bookmarkStats[bookmarkId] = updated;
+      if (url) {
+        bookmarkStats[url] = updated;
+      }
       
       // Save updated stats
       await chrome.storage.local.set({ bookmarkStats });
       
-      console.log(`Bookmark ${bookmarkId} usage tracked:`, bookmarkStats[bookmarkId]);
+      console.log(`Bookmark ${bookmarkId} usage tracked:`, updated);
     } catch (error) {
       console.error('Failed to track bookmark usage:', error);
     }
@@ -311,12 +316,16 @@ class DataIndexer {
   /**
    * Toggle pin status of a link
    * @param {string} id - Item ID
+   * @param {string} [url] - Optional Item URL
    */
-  async togglePin(id) {
-    if (this.pinnedLinks.has(id)) {
+  async togglePin(id, url = null) {
+    const isCurrentlyPinned = this.isPinned(id, url);
+    if (isCurrentlyPinned) {
       this.pinnedLinks.delete(id);
+      if (url) this.pinnedLinks.delete(url);
     } else {
       this.pinnedLinks.add(id);
+      if (url) this.pinnedLinks.add(url);
     }
     
     // Save to storage
@@ -328,9 +337,12 @@ class DataIndexer {
   /**
    * Check if a link is pinned
    * @param {string} id - Item ID
+   * @param {string} [url] - Optional Item URL
    */
-  isPinned(id) {
-    return this.pinnedLinks.has(id);
+  isPinned(id, url = null) {
+    if (this.pinnedLinks.has(id)) return true;
+    if (url && this.pinnedLinks.has(url)) return true;
+    return false;
   }
 
   /**

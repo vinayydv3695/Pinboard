@@ -45,7 +45,10 @@ class SettingsManager {
       customCommandsList: document.getElementById('customCommandsList'),
       addCommandBtn: document.getElementById('addCommandBtn'),
       saveBtn: document.getElementById('saveBtn'),
-      resetBtn: document.getElementById('resetBtn')
+      resetBtn: document.getElementById('resetBtn'),
+      exportBackupBtn: document.getElementById('exportBackupBtn'),
+      importBackupBtn: document.getElementById('importBackupBtn'),
+      importBackupFile: document.getElementById('importBackupFile')
     };
   }
 
@@ -368,6 +371,23 @@ class SettingsManager {
     this.elements.resetBtn.addEventListener('click', () => {
       this.resetSettings();
     });
+
+    // Backup & Restore
+    if (this.elements.exportBackupBtn) {
+      this.elements.exportBackupBtn.addEventListener('click', () => this.exportBackup());
+    }
+
+    if (this.elements.importBackupBtn) {
+      this.elements.importBackupBtn.addEventListener('click', () => {
+        if (this.elements.importBackupFile) {
+          this.elements.importBackupFile.click();
+        }
+      });
+    }
+
+    if (this.elements.importBackupFile) {
+      this.elements.importBackupFile.addEventListener('change', (e) => this.importBackup(e));
+    }
   }
 
   /**
@@ -455,9 +475,14 @@ class SettingsManager {
    */
   async ensureSeekaiFolder() {
     try {
-      // Search for existing Seekai folder
-      const bookmarks = await chrome.bookmarks.search({ title: 'Seekai Bookmarks' });
-      const folder = bookmarks.find(b => !b.url); // Folders don't have URLs
+      // Search for existing Pinboard or Seekai folder
+      const pinboardBookmarks = await chrome.bookmarks.search({ title: 'Pinboard Bookmarks' });
+      let folder = pinboardBookmarks.find(b => !b.url);
+      
+      if (!folder) {
+        const seekaiBookmarks = await chrome.bookmarks.search({ title: 'Seekai Bookmarks' });
+        folder = seekaiBookmarks.find(b => !b.url);
+      }
       
       if (folder) {
         return folder;
@@ -465,14 +490,17 @@ class SettingsManager {
 
       // Create new folder in the bookmarks bar
       const bookmarksBar = await chrome.bookmarks.getTree();
-      const bookmarksBarId = bookmarksBar[0].children[0].id; // Usually "1"
+      let bookmarksBarId = '1';
+      if (bookmarksBar && bookmarksBar[0] && bookmarksBar[0].children && bookmarksBar[0].children[0]) {
+        bookmarksBarId = bookmarksBar[0].children[0].id;
+      }
 
       return await chrome.bookmarks.create({
         parentId: bookmarksBarId,
-        title: 'Seekai Bookmarks'
+        title: 'Pinboard Bookmarks'
       });
     } catch (error) {
-      console.error('Failed to create Seekai folder:', error);
+      console.error('Failed to create Pinboard folder:', error);
       // Fallback: use bookmarks bar root
       return { id: '1' };
     }
@@ -505,6 +533,345 @@ class SettingsManager {
       console.error('Failed to reset settings:', error);
       this.showToast('Failed to reset settings');
     }
+  }
+
+  /**
+   * Helper to recursively extract bookmarks from a Chrome bookmark tree
+   */
+  extractBookmarksFromTree(nodes, parentTitle = '') {
+    const list = [];
+    for (const node of nodes) {
+      if (node.url) {
+        list.push({
+          id: node.id,
+          title: node.title || 'Untitled',
+          url: node.url,
+          folder: parentTitle || 'Bookmarks',
+          dateAdded: node.dateAdded
+        });
+      }
+      if (node.children) {
+        list.push(...this.extractBookmarksFromTree(node.children, node.title || parentTitle));
+      }
+    }
+    return list;
+  }
+
+  /**
+   * Export all bookmarks, pinned status, click stats, and settings to a JSON file
+   */
+  async exportBackup() {
+    try {
+      const localData = await chrome.storage.local.get(null);
+      const syncData = await chrome.storage.sync.get(null);
+      const bookmarkTree = await chrome.bookmarks.getTree();
+      const allBookmarks = this.extractBookmarksFromTree(bookmarkTree);
+
+      const bookmarkStats = localData.bookmarkStats || {};
+      const pinnedLinks = new Set(localData.pinnedLinks || []);
+
+      const statsByUrl = {};
+      const pinnedUrls = [];
+      const enrichedBookmarks = [];
+
+      for (const b of allBookmarks) {
+        const stats = bookmarkStats[b.id] || (b.url && bookmarkStats[b.url]) || { count: 0, lastUsed: 0 };
+        const isPinned = pinnedLinks.has(b.id) || (b.url && pinnedLinks.has(b.url));
+
+        if (b.url) {
+          if (stats.count > 0) {
+            statsByUrl[b.url] = stats;
+          }
+          if (isPinned) {
+            pinnedUrls.push(b.url);
+          }
+        }
+
+        enrichedBookmarks.push({
+          ...b,
+          useCount: stats.count || 0,
+          lastUsed: stats.lastUsed || 0,
+          isPinned: !!isPinned
+        });
+      }
+
+      // Also ensure any raw URL entries in storage are captured
+      for (const item of pinnedLinks) {
+        if (typeof item === 'string' && (item.startsWith('http://') || item.startsWith('https://')) && !pinnedUrls.includes(item)) {
+          pinnedUrls.push(item);
+        }
+      }
+      for (const [key, val] of Object.entries(bookmarkStats)) {
+        if ((key.startsWith('http://') || key.startsWith('https://')) && !statsByUrl[key]) {
+          statsByUrl[key] = val;
+        }
+      }
+
+      const backup = {
+        _source: 'pinboard_full_backup_v3',
+        version: 3,
+        exportedAt: new Date().toISOString(),
+        bookmarks: enrichedBookmarks,
+        pinnedUrls: pinnedUrls,
+        bookmarkStatsByUrl: statsByUrl,
+        bookmarkTree: bookmarkTree,
+        local: localData,
+        sync: syncData
+      };
+
+      const json = JSON.stringify(backup, null, 2);
+      const blob = new Blob([json], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `pinboard_backup_${new Date().toISOString().split('T')[0]}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      
+      this.showToast(`Exported ${enrichedBookmarks.length} bookmarks, ${pinnedUrls.length} pinned!`);
+    } catch (error) {
+      console.error('Failed to export backup:', error);
+      this.showToast('Failed to export backup');
+    }
+  }
+
+  /**
+   * Import storage data and bookmarks from a JSON file
+   * @param {Event} event - File input change event
+   */
+  importBackup(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      try {
+        const rawText = (e.target && e.target.result) ? String(e.target.result) : '';
+        const trimmed = rawText.trim();
+        let data = null;
+
+        // Strategy 1: HTML Bookmark File
+        if (trimmed.includes('<DT><A') || trimmed.includes('HREF="') || (file.name && file.name.endsWith('.html'))) {
+          const regex = /<A\s+[^>]*HREF="([^"]+)"[^>]*>([^<]*)<\/A>/gi;
+          let match;
+          const htmlBookmarks = [];
+          while ((match = regex.exec(trimmed)) !== null) {
+            htmlBookmarks.push({
+              url: match[1],
+              title: match[2] || 'Bookmark',
+              useCount: 0,
+              isPinned: false
+            });
+          }
+          data = { bookmarks: htmlBookmarks };
+        } else {
+          // Strategy 2: Direct JSON parse
+          try {
+            data = JSON.parse(trimmed);
+          } catch (e1) {
+            // Strategy 3: Slicing curly braces (object)
+            const firstBrace = trimmed.indexOf('{');
+            const lastBrace = trimmed.lastIndexOf('}');
+            if (firstBrace !== -1 && lastBrace > firstBrace) {
+              try {
+                data = JSON.parse(trimmed.substring(firstBrace, lastBrace + 1));
+              } catch (e2) {}
+            }
+
+            // Strategy 4: Slicing square brackets (array)
+            if (!data) {
+              const firstBracket = trimmed.indexOf('[');
+              const lastBracket = trimmed.lastIndexOf(']');
+              if (firstBracket !== -1 && lastBracket > firstBracket) {
+                try {
+                  data = JSON.parse(trimmed.substring(firstBracket, lastBracket + 1));
+                } catch (e3) {}
+              }
+            }
+
+            if (!data) {
+              throw new Error('Unable to parse JSON: ' + e1.message);
+            }
+          }
+        }
+
+        if (typeof data !== 'object' || data === null) {
+          throw new Error('Invalid backup file content');
+        }
+
+        // 1. Extract all bookmarks from backup
+        let bookmarksToImport = [];
+        if (Array.isArray(data)) {
+          bookmarksToImport = [...data];
+        } else if (Array.isArray(data.bookmarks)) {
+          bookmarksToImport = [...data.bookmarks];
+        } else if (Array.isArray(data.bookmarkTree)) {
+          bookmarksToImport = this.extractBookmarksFromTree(data.bookmarkTree);
+        }
+
+        const customCommands = data.sync?.customCommands || data.customCommands || [];
+        if (Array.isArray(customCommands)) {
+          for (const cmd of customCommands) {
+            if (cmd && cmd.url && !bookmarksToImport.some(b => b && b.url === cmd.url)) {
+              bookmarksToImport.push({
+                title: cmd.title || 'Bookmark',
+                url: cmd.url,
+                useCount: 0,
+                isPinned: false
+              });
+            }
+          }
+        }
+
+        // 2. Safely create missing bookmarks in Chrome
+        let createdCount = 0;
+        try {
+          const targetFolder = await this.ensureSeekaiFolder();
+          const currentTree = await chrome.bookmarks.getTree();
+          const currentBookmarks = this.extractBookmarksFromTree(currentTree);
+          const existingUrls = new Set(
+            currentBookmarks.map(b => (b && b.url ? String(b.url).trim().replace(/\/$/, '') : ''))
+          );
+
+          for (const b of bookmarksToImport) {
+            if (!b || !b.url) continue;
+            const normUrl = String(b.url).trim().replace(/\/$/, '');
+            if (!existingUrls.has(normUrl)) {
+              try {
+                await chrome.bookmarks.create({
+                  parentId: (targetFolder && targetFolder.id) ? targetFolder.id : '1',
+                  title: String(b.title || 'Untitled'),
+                  url: String(b.url)
+                });
+                existingUrls.add(normUrl);
+                createdCount++;
+              } catch (err) {
+                console.warn('Failed to create bookmark:', b.url, err);
+              }
+            }
+          }
+        } catch (bErr) {
+          console.warn('Bookmark creation step had issues:', bErr);
+        }
+
+        // 3. Re-read fresh bookmark tree to map IDs
+        let freshBookmarks = [];
+        try {
+          const freshTree = await chrome.bookmarks.getTree();
+          freshBookmarks = this.extractBookmarksFromTree(freshTree);
+        } catch (tErr) {
+          console.warn('Could not read updated bookmark tree:', tErr);
+        }
+
+        // 4. Map stats and pins
+        const statsByUrl = (data.bookmarkStatsByUrl && typeof data.bookmarkStatsByUrl === 'object') ? data.bookmarkStatsByUrl : {};
+        const rawStats = (data.local && typeof data.local.bookmarkStats === 'object') ? data.local.bookmarkStats :
+                         (data.bookmarkStats && typeof data.bookmarkStats === 'object') ? data.bookmarkStats : {};
+
+        for (const b of bookmarksToImport) {
+          if (b && b.url && Number(b.useCount) > 0) {
+            const countNum = Number(b.useCount);
+            if (!statsByUrl[b.url] || countNum > (statsByUrl[b.url].count || 0)) {
+              statsByUrl[b.url] = { count: countNum, lastUsed: Number(b.lastUsed) || Date.now() };
+            }
+          }
+        }
+
+        const pinnedUrlsSet = new Set();
+        if (Array.isArray(data.pinnedUrls)) {
+          data.pinnedUrls.forEach(u => u && pinnedUrlsSet.add(String(u)));
+        }
+        for (const b of bookmarksToImport) {
+          if (b && b.url && b.isPinned) {
+            pinnedUrlsSet.add(String(b.url));
+          }
+        }
+
+        const rawPinned = Array.isArray(data.local?.pinnedLinks) ? data.local.pinnedLinks :
+                          Array.isArray(data.pinnedLinks) ? data.pinnedLinks : [];
+        for (const p of rawPinned) {
+          if (typeof p === 'string' && (p.startsWith('http://') || p.startsWith('https://'))) {
+            pinnedUrlsSet.add(p);
+          }
+        }
+
+        let currentStorage = {};
+        try {
+          currentStorage = await chrome.storage.local.get(['bookmarkStats', 'pinnedLinks']);
+        } catch (e) {}
+
+        const finalStats = { ...(currentStorage.bookmarkStats || {}) };
+        const finalPinned = new Set(Array.isArray(currentStorage.pinnedLinks) ? currentStorage.pinnedLinks : []);
+
+        for (const b of freshBookmarks) {
+          if (!b || !b.url) continue;
+          const normUrl = b.url;
+          const stat = statsByUrl[normUrl] || rawStats[b.id] || rawStats[normUrl];
+          if (stat && (Number(stat.count) > 0 || Number(stat.useCount) > 0)) {
+            const c = Number(stat.count || stat.useCount || 0);
+            const l = Number(stat.lastUsed || Date.now());
+            finalStats[b.id] = { count: c, lastUsed: l };
+            finalStats[normUrl] = { count: c, lastUsed: l };
+          }
+
+          if (pinnedUrlsSet.has(normUrl) || rawPinned.includes(b.id)) {
+            finalPinned.add(b.id);
+            finalPinned.add(normUrl);
+          }
+        }
+
+        for (const pUrl of pinnedUrlsSet) {
+          finalPinned.add(pUrl);
+        }
+        for (const [sUrl, sData] of Object.entries(statsByUrl)) {
+          finalStats[sUrl] = sData;
+        }
+
+        try {
+          await chrome.storage.local.set({
+            bookmarkStats: finalStats,
+            pinnedLinks: Array.from(finalPinned)
+          });
+        } catch (locErr) {
+          console.warn('Failed saving local storage:', locErr);
+        }
+
+        // 5. Restore sync settings & theme safely
+        try {
+          const syncToSet = (data.sync && typeof data.sync === 'object') ? data.sync : {};
+          if (data.theme) syncToSet.theme = data.theme;
+          if (data.zenMode !== undefined) syncToSet.zenMode = data.zenMode;
+          if (data.maxResults) syncToSet.maxResults = data.maxResults;
+          if (data.defaultSearchEngine) syncToSet.defaultSearchEngine = data.defaultSearchEngine;
+
+          if (Object.keys(syncToSet).length > 0) {
+            await chrome.storage.sync.set(syncToSet);
+            if (syncToSet.theme && typeof themeManager !== 'undefined') {
+              await themeManager.setTheme(syncToSet.theme);
+            }
+          }
+        } catch (syncErr) {
+          console.warn('Failed saving sync settings:', syncErr);
+        }
+
+        this.showToast(`Restored ${createdCount} bookmarks, ${pinnedUrlsSet.size} pinned links! Reloading...`);
+
+        setTimeout(() => {
+          window.location.reload();
+        }, 1200);
+      } catch (error) {
+        console.error('Failed to import backup:', error);
+        this.showToast('Import failed: ' + (error.message || 'Invalid format'));
+      }
+
+      if (this.elements.importBackupFile) {
+        this.elements.importBackupFile.value = '';
+      }
+    };
+    reader.readAsText(file);
   }
 
   /**
